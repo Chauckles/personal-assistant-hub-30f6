@@ -77,9 +77,10 @@ async function checkCanvas(token) {
     const courses = await coursesResponse.json();
     const allAssignments = [];
 
-    // Fetch assignments for each course
+    // Fetch assignments, announcements, and pages for each course
     for (const course of courses) {
       try {
+        // 1. Fetch regular assignments
         const assignmentsResponse = await fetch(
           `${CONFIG.canvasUrl}/api/v1/courses/${course.id}/assignments?per_page=100`,
           {
@@ -105,8 +106,128 @@ async function checkCanvas(token) {
 
           allAssignments.push(...upcomingAssignments);
         }
+
+        // 2. Fetch announcements (discussion topics marked as announcements)
+        const announcementsResponse = await fetch(
+          `${CONFIG.canvasUrl}/api/v1/courses/${course.id}/discussion_topics?only_announcements=true&per_page=100`,
+          {
+            headers: { 'Authorization': `Bearer ${token}` }
+          }
+        );
+
+        if (announcementsResponse.ok) {
+          const announcements = await announcementsResponse.json();
+
+          // Extract due dates or important dates from announcement text
+          for (const announcement of announcements) {
+            // Parse announcement message for dates (basic pattern matching)
+            const dates = extractDatesFromText(announcement.message || '');
+
+            for (const date of dates) {
+              allAssignments.push({
+                type: 'announcement',
+                course: course.name,
+                courseId: course.id,
+                title: `📢 ${announcement.title}`,
+                dueAt: date.toISOString(),
+                url: announcement.html_url,
+                submitted: false
+              });
+            }
+
+            // Also add announcement itself as a "to-read" item if recent (last 7 days)
+            const postedDate = new Date(announcement.posted_at || announcement.created_at);
+            const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+            if (postedDate > sevenDaysAgo) {
+              allAssignments.push({
+                type: 'announcement',
+                course: course.name,
+                courseId: course.id,
+                title: `📢 ${announcement.title}`,
+                dueAt: postedDate.toISOString(),
+                url: announcement.html_url,
+                submitted: false
+              });
+            }
+          }
+        }
+
+        // 3. Fetch course pages (where syllabi often live)
+        const pagesResponse = await fetch(
+          `${CONFIG.canvasUrl}/api/v1/courses/${course.id}/pages?per_page=100`,
+          {
+            headers: { 'Authorization': `Bearer ${token}` }
+          }
+        );
+
+        if (pagesResponse.ok) {
+          const pages = await pagesResponse.json();
+
+          for (const page of pages) {
+            // Check if page title or URL suggests it's a syllabus or important info
+            const isSyllabus = /syllabus|schedule|calendar|due dates|assignments/i.test(page.title || page.url);
+
+            if (isSyllabus) {
+              // Fetch full page content to extract dates
+              const pageDetailResponse = await fetch(
+                `${CONFIG.canvasUrl}/api/v1/courses/${course.id}/pages/${page.url}`,
+                {
+                  headers: { 'Authorization': `Bearer ${token}` }
+                }
+              );
+
+              if (pageDetailResponse.ok) {
+                const pageDetail = await pageDetailResponse.json();
+                const dates = extractDatesFromText(pageDetail.body || '');
+
+                for (const date of dates) {
+                  allAssignments.push({
+                    type: 'page',
+                    course: course.name,
+                    courseId: course.id,
+                    title: `📄 ${page.title}`,
+                    dueAt: date.toISOString(),
+                    url: pageDetail.html_url,
+                    submitted: false
+                  });
+                }
+              }
+            }
+          }
+        }
+
+        // 4. Fetch course home page (front page)
+        const courseDetailResponse = await fetch(
+          `${CONFIG.canvasUrl}/api/v1/courses/${course.id}?include[]=syllabus_body`,
+          {
+            headers: { 'Authorization': `Bearer ${token}` }
+          }
+        );
+
+        if (courseDetailResponse.ok) {
+          const courseDetail = await courseDetailResponse.json();
+
+          // Extract dates from syllabus
+          if (courseDetail.syllabus_body) {
+            const dates = extractDatesFromText(courseDetail.syllabus_body);
+
+            for (const date of dates) {
+              allAssignments.push({
+                type: 'syllabus',
+                course: course.name,
+                courseId: course.id,
+                title: `📋 Syllabus: ${course.name}`,
+                dueAt: date.toISOString(),
+                url: `${CONFIG.canvasUrl}/courses/${course.id}`,
+                submitted: false
+              });
+            }
+          }
+        }
+
       } catch (error) {
-        console.error(`Error fetching assignments for course ${course.id}:`, error);
+        console.error(`Error fetching data for course ${course.id}:`, error);
       }
     }
 
@@ -170,6 +291,73 @@ async function checkCanvas(token) {
   } catch (error) {
     console.error('Error checking Canvas:', error);
   }
+}
+
+// Extract dates from HTML/text content
+function extractDatesFromText(html) {
+  if (!html) return [];
+
+  // Strip HTML tags to get plain text
+  const text = html.replace(/<[^>]*>/g, ' ');
+  const dates = [];
+  const now = new Date();
+  const currentYear = now.getFullYear();
+
+  // Pattern 1: "Due: MM/DD" or "Due MM/DD/YYYY"
+  const dueDatePattern = /due[:\s]+(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?/gi;
+  let match;
+
+  while ((match = dueDatePattern.exec(text)) !== null) {
+    const month = parseInt(match[1]) - 1; // JS months are 0-indexed
+    const day = parseInt(match[2]);
+    const year = match[3] ? (match[3].length === 2 ? 2000 + parseInt(match[3]) : parseInt(match[3])) : currentYear;
+
+    const date = new Date(year, month, day, 23, 59, 59); // Default to end of day
+    if (!isNaN(date.getTime()) && date > now) {
+      dates.push(date);
+    }
+  }
+
+  // Pattern 2: "September 15" or "Sept 15, 2026"
+  const monthNamePattern = /(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:,?\s+(\d{4}))?/gi;
+
+  while ((match = monthNamePattern.exec(text)) !== null) {
+    const monthNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+    const monthName = match[1].toLowerCase().substring(0, 3);
+    const month = monthNames.indexOf(monthName);
+    const day = parseInt(match[2]);
+    const year = match[3] ? parseInt(match[3]) : currentYear;
+
+    if (month !== -1) {
+      const date = new Date(year, month, day, 23, 59, 59);
+      if (!isNaN(date.getTime()) && date > now) {
+        dates.push(date);
+      }
+    }
+  }
+
+  // Pattern 3: ISO dates "2026-09-15"
+  const isoPattern = /(\d{4})-(\d{2})-(\d{2})/g;
+
+  while ((match = isoPattern.exec(text)) !== null) {
+    const date = new Date(match[0]);
+    if (!isNaN(date.getTime()) && date > now) {
+      dates.push(date);
+    }
+  }
+
+  // Remove duplicates (dates within 1 day of each other)
+  const uniqueDates = [];
+  for (const date of dates) {
+    const isDuplicate = uniqueDates.some(existing =>
+      Math.abs(existing - date) < 24 * 60 * 60 * 1000
+    );
+    if (!isDuplicate) {
+      uniqueDates.push(date);
+    }
+  }
+
+  return uniqueDates;
 }
 
 // Check Blackbaud for schedule updates
