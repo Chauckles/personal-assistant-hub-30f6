@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Generate Extension Icons</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 50px auto;
+      padding: 20px;
+    }
+    h1 { color: #333; }
+    .instructions {
+      background: #f0f0f0;
+      padding: 20px;
+      border-radius: 8px;
+      margin: 20px 0;
+    }
+    canvas {
+      border: 1px solid #ccc;
+      margin: 10px;
+    }
+    button {
+      background: #4F46E5;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 6px;
+      font-size: 16px;
+      cursor: pointer;
+      margin: 10px 5px;
+    }
+    button:hover {
+      background: #4338CA;
+    }
+    .preview {
+      display: flex;
+      gap: 20px;
+      margin: 20px 0;
+      align-items: center;
+    }
+  </style>
+</head>
+<body>
+  <h1>🎨 PA Hub Icon Generator</h1>
+
+  <div class="instructions">
+    <h3>Instructions:</h3>
+    <ol>
+      <li>Click "Generate Icons" below</li>
+      <li>Right-click each icon and "Save image as..."</li>
+      <li>Save them in the <code>icons/</code> folder as:
+        <ul>
+          <li>icon16.png</li>
+          <li>icon48.png</li>
+          <li>icon128.png</li>
+        </ul>
+      </li>
+    </ol>
+  </div>
+
+  <button onclick="generateIcons()">Generate Icons</button>
+
+  <div class="preview" id="preview"></div>
+
+  <script>
+    function generateIcons() {
+      const preview = document.getElementById('preview');
+      preview.innerHTML = '';
+
+      [16, 48, 128].forEach(size => {
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+
+        // Background gradient
+        const gradient = ctx.createLinearGradient(0, 0, size, size);
+        gradient.addColorStop(0, '#4F46E5');
+        gradient.addColorStop(1, '#7C3AED');
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+        ctx.fill();
+
+        // White letter "P"
+        ctx.fillStyle = 'white';
+        ctx.font = `bold ${size * 0.6}px Arial`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('P', size / 2, size / 2);
+
+        // Add to preview
+        const wrapper = document.createElement('div');
+        wrapper.style.textAlign = 'center';
+
+        const label = document.createElement('div');
+        label.textContent = `${size}x${size}`;
+        label.style.marginBottom = '8px';
+        label.style.fontWeight = 'bold';
+
+        wrapper.appendChild(label);
+        wrapper.appendChild(canvas);
+
+        preview.appendChild(wrapper);
+      });
+    }
+  </script>
+</body>
+</html>
